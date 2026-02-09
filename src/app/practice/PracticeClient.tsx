@@ -27,6 +27,18 @@ type CardRow = {
   } | null
 }
 
+type CardRowRaw = Omit<CardRow, "note"> & {
+  note: { korean: string; french: string }[] | null
+}
+
+function mapCardRows(raw: CardRowRaw[] | null): CardRow[] {
+  if (!raw) return []
+  return raw.map((row) => ({
+    ...row,
+    note: Array.isArray(row.note) ? row.note[0] ?? null : row.note ?? null
+  }))
+}
+
 type Props = {
   options: {
     mode: Mode
@@ -123,7 +135,7 @@ export default function PracticeClient({ options }: Props) {
           .limit(n)
 
         if (fetchError) throw fetchError
-        setCards((data ?? []) as CardRow[])
+        setCards(mapCardRows(data as CardRowRaw[] | null))
         return
       }
 
@@ -139,7 +151,7 @@ export default function PracticeClient({ options }: Props) {
 
       if (dueError) throw dueError
 
-      const dueCards = (due ?? []) as CardRow[]
+      const dueCards = mapCardRows(due as CardRowRaw[] | null)
       if (dueCards.length >= n) {
         setCards(dueCards)
         return
@@ -157,7 +169,7 @@ export default function PracticeClient({ options }: Props) {
 
       if (upcomingError) throw upcomingError
 
-      setCards([...dueCards, ...((upcoming ?? []) as CardRow[])])
+      setCards([...dueCards, ...mapCardRows(upcoming as CardRowRaw[] | null)])
     } catch (e) {
       setError(formatUnknownError(e))
       setCards([])

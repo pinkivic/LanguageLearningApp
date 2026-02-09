@@ -12,20 +12,8 @@ export default function HomePage() {
       </div>
 
       <form action="/practice" method="GET" className="card stack">
-        <div className="row">
-          <label className="field">
-            <span className="label">Cards this session</span>
-            <input
-              className="input"
-              type="number"
-              name="n"
-              defaultValue={20}
-              min={1}
-              max={200}
-              inputMode="numeric"
-              required
-            />
-          </label>
+        <div className="card muted">
+          Session length: <span className="mono">1:30</span>. Maximize your score.
         </div>
 
         <fieldset className="fieldset">
@@ -42,20 +30,6 @@ export default function HomePage() {
           </div>
         </fieldset>
 
-        <fieldset className="fieldset">
-          <legend className="legend">Direction</legend>
-          <div className="row">
-            <label className="row">
-              <input type="radio" name="dir" value="fr-ko" defaultChecked />
-              <span>French → Korean</span>
-            </label>
-            <label className="row">
-              <input type="radio" name="dir" value="ko-fr" />
-              <span>Korean → French</span>
-            </label>
-          </div>
-        </fieldset>
-
         <div className="row">
           <button className="button primary" type="submit">
             Start
@@ -63,15 +37,12 @@ export default function HomePage() {
         </div>
       </form>
 
-      <div className="card muted">
-        Env status:{" "}
-        <span className="mono">
-          URL {hasUrl ? "OK" : "MISSING"} · KEY {hasKey ? "OK" : "MISSING"}
-        </span>
-        <br />
-        If missing, ensure you created <span className="mono">.env.local</span>{" "}
-        (repo root), then restart <span className="mono">npm run dev</span>.
-      </div>
+      {!(hasUrl && hasKey) && (
+        <div className="card muted">
+          Missing env vars. Create <span className="mono">.env.local</span> and
+          restart <span className="mono">npm run dev</span>.
+        </div>
+      )}
     </section>
   )
 }

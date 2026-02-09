@@ -13,6 +13,7 @@ type Stats = {
 export default function StatsClient() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [bestScore, setBestScore] = useState<number | null>(null)
 
   const supabase = useMemo(() => {
     try {
@@ -40,7 +41,7 @@ export default function StatsClient() {
       const { count: learningCount, error: learningError } = await supabase
         .from("cards")
         .select("id", { count: "exact", head: true })
-        .gte("success_streak", 1)
+        .gte("success_streak", 3)
 
       if (learningError) {
         setError(learningError.message)
@@ -50,7 +51,7 @@ export default function StatsClient() {
       const { count: knownCount, error: knownError } = await supabase
         .from("cards")
         .select("id", { count: "exact", head: true })
-        .gte("success_streak", 2)
+        .gte("success_streak", 5)
 
       if (knownError) {
         setError(knownError.message)
@@ -66,6 +67,18 @@ export default function StatsClient() {
 
     void fetchCounts()
   }, [supabase])
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("bestScore")
+      if (stored) {
+        const value = Number.parseInt(stored, 10)
+        if (Number.isFinite(value)) setBestScore(value)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
 
   if (error) {
     return (
@@ -88,6 +101,9 @@ export default function StatsClient() {
       <span className="mono">unknown {stats.unknown}</span>
       <span className="mono">learning {stats.learning}</span>
       <span className="mono">known {stats.known}</span>
+      {bestScore !== null && (
+        <span className="mono">best {bestScore}</span>
+      )}
     </div>
   )
 }

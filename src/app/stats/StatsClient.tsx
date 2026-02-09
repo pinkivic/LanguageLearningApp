@@ -31,7 +31,7 @@ export default function StatsClient() {
       const { count: unknownCount, error: unknownError } = await supabase
         .from("cards")
         .select("id", { count: "exact", head: true })
-        .eq("success_streak", 0)
+        .lte("success_streak", 2)
 
       if (unknownError) {
         setError(unknownError.message)
@@ -42,6 +42,7 @@ export default function StatsClient() {
         .from("cards")
         .select("id", { count: "exact", head: true })
         .gte("success_streak", 3)
+        .lte("success_streak", 4)
 
       if (learningError) {
         setError(learningError.message)

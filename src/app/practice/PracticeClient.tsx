@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { SupabaseClient } from "@supabase/supabase-js"
+import Link from "next/link"
 
 import { computeNextSrs } from "@/lib/srs"
 import { getSupabaseBrowserClient } from "@/lib/supabase"
@@ -163,7 +164,7 @@ export default function PracticeClient({ options }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [mode, n, supabase])
+  }, [dir, mode, n, supabase])
 
   useEffect(() => {
     void loadCards()
@@ -276,9 +277,9 @@ export default function PracticeClient({ options }: Props) {
           <div className="muted">Setup error</div>
           <div className="mono">{error}</div>
         </div>
-        <a className="button" href="/">
+        <Link className="button" href="/">
           Back
-        </a>
+        </Link>
       </section>
     )
   }
@@ -300,9 +301,9 @@ export default function PracticeClient({ options }: Props) {
           You reviewed <span className="mono">{cards.length}</span> cards.
         </div>
         <div className="row">
-          <a className="button primary" href="/">
+          <Link className="button primary" href="/">
             New session
-          </a>
+          </Link>
           <button className="button" type="button" onClick={loadCards}>
             Replay same settings
           </button>
@@ -320,9 +321,9 @@ export default function PracticeClient({ options }: Props) {
           <span className="mono">public.cards</span> and{" "}
           <span className="mono">public.notes</span>.
         </div>
-        <a className="button" href="/">
+        <Link className="button" href="/">
           Back
-        </a>
+        </Link>
       </section>
     )
   }
@@ -414,9 +415,9 @@ export default function PracticeClient({ options }: Props) {
             </button>
           )}
 
-          <a className="button" href="/">
+          <Link className="button" href="/">
             Stop
-          </a>
+          </Link>
         </div>
 
         {showExpected && (

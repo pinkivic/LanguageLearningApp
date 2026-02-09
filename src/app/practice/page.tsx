@@ -15,16 +15,12 @@ function parseN(value: unknown): number {
   return Math.max(1, Math.min(200, parsed))
 }
 
-type SearchParams =
-  | Record<string, string | string[] | undefined>
-  | Promise<Record<string, string | string[] | undefined>>
-
 export default async function PracticePage({
   searchParams
 }: {
-  searchParams?: SearchParams
+  searchParams?: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const params = await Promise.resolve(searchParams ?? {})
+  const params = await (searchParams ?? Promise.resolve({}))
   const mode = parseMode(params.mode)
   const dir = parseDir(params.dir)
   const n = parseN(params.n)

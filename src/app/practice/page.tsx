@@ -20,7 +20,9 @@ export default async function PracticePage({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const params = await (searchParams ?? Promise.resolve({}))
+  const params: Record<string, string | string[] | undefined> = await (
+    searchParams ?? Promise.resolve({})
+  )
   const mode = parseMode(params.mode)
   const dir = parseDir(params.dir)
   const n = parseN(params.n)

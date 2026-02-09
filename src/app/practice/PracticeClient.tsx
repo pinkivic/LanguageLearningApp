@@ -1,0 +1,402 @@
+"use client"
+
+import { useCallback, useEffect, useRef, useState } from "react"
+import type { SupabaseClient } from "@supabase/supabase-js"
+
+import { computeNextSrs } from "@/lib/srs"
+import { getSupabaseBrowserClient } from "@/lib/supabase"
+import { normalizeForExactMatch } from "@/lib/text"
+
+export type Mode = "srs" | "streak"
+export type Direction = "fr-ko" | "ko-fr"
+
+type CardRow = {
+  id: string
+  french: string
+  korean: string
+  streak: number
+  due_at: string
+}
+
+type Props = {
+  options: {
+    mode: Mode
+    dir: Direction
+    n: number
+  }
+}
+
+function getPrompt(card: CardRow, dir: Direction): string {
+  return dir === "fr-ko" ? card.french : card.korean
+}
+
+function getExpected(card: CardRow, dir: Direction): string {
+  return dir === "fr-ko" ? card.korean : card.french
+}
+
+export default function PracticeClient({ options }: Props) {
+  const { mode, dir, n } = options
+  const [supabase, setSupabase] = useState<SupabaseClient | null>(null)
+  const [cards, setCards] = useState<CardRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const [index, setIndex] = useState(0)
+  const [answer, setAnswer] = useState("")
+  const [showExpected, setShowExpected] = useState(false)
+  const [autoResult, setAutoResult] = useState<boolean | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    try {
+      setSupabase(getSupabaseBrowserClient())
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      setSupabase(null)
+    }
+  }, [])
+
+  const current = cards[index] ?? null
+  const prompt = current ? getPrompt(current, dir) : ""
+  const expected = current ? getExpected(current, dir) : ""
+
+  const loadCards = useCallback(async () => {
+    if (!supabase) return
+
+    setLoading(true)
+    setError(null)
+    setSaveError(null)
+    setIndex(0)
+    setAnswer("")
+    setShowExpected(false)
+    setAutoResult(null)
+
+    try {
+      const nowIso = new Date().toISOString()
+
+      if (mode === "streak") {
+        const { data, error: fetchError } = await supabase
+          .from("cards")
+          .select("id,french,korean,streak,due_at")
+          .order("streak", { ascending: true })
+          .order("due_at", { ascending: true, nullsFirst: true })
+          .limit(n)
+
+        if (fetchError) throw fetchError
+        setCards((data ?? []) as CardRow[])
+        return
+      }
+
+      const { data: due, error: dueError } = await supabase
+        .from("cards")
+        .select("id,french,korean,streak,due_at")
+        .lte("due_at", nowIso)
+        .order("due_at", { ascending: true, nullsFirst: true })
+        .limit(n)
+
+      if (dueError) throw dueError
+
+      const dueCards = (due ?? []) as CardRow[]
+      if (dueCards.length >= n) {
+        setCards(dueCards)
+        return
+      }
+
+      const { data: upcoming, error: upcomingError } = await supabase
+        .from("cards")
+        .select("id,french,korean,streak,due_at")
+        .gt("due_at", nowIso)
+        .order("due_at", { ascending: true })
+        .limit(n - dueCards.length)
+
+      if (upcomingError) throw upcomingError
+
+      setCards([...dueCards, ...((upcoming ?? []) as CardRow[])])
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      setCards([])
+    } finally {
+      setLoading(false)
+    }
+  }, [mode, n, supabase])
+
+  useEffect(() => {
+    void loadCards()
+  }, [loadCards])
+
+  useEffect(() => {
+    if (!loading) inputRef.current?.focus()
+  }, [loading, index])
+
+  const goNext = useCallback(() => {
+    setAnswer("")
+    setShowExpected(false)
+    setAutoResult(null)
+    setSaving(false)
+    setSaveError(null)
+    setIndex((i) => i + 1)
+  }, [])
+
+  const saveReview = useCallback(
+    async (card: CardRow, wasCorrect: boolean, userAnswer: string) => {
+      if (!supabase) return
+
+      setSaving(true)
+      setSaveError(null)
+
+      const now = new Date()
+      const { nextDueAt, nextStreak } = computeNextSrs({
+        now,
+        wasCorrect,
+        previousStreak: card.streak ?? 0
+      })
+
+      const { error: updateError } = await supabase
+        .from("cards")
+        .update({
+          streak: nextStreak,
+          due_at: nextDueAt.toISOString(),
+          last_reviewed_at: now.toISOString(),
+          last_result: wasCorrect,
+          last_answer: userAnswer
+        })
+        .eq("id", card.id)
+
+      setSaving(false)
+
+      if (updateError) {
+        setSaveError(updateError.message)
+        return false
+      }
+
+      setCards((prev) =>
+        prev.map((c) =>
+          c.id === card.id
+            ? { ...c, streak: nextStreak, due_at: nextDueAt.toISOString() }
+            : c
+        )
+      )
+      return true
+    },
+    [supabase]
+  )
+
+  const onReveal = useCallback(async () => {
+    if (!current || showExpected || saving) return
+
+    setShowExpected(true)
+
+    if (dir === "fr-ko") {
+      const isCorrect =
+        normalizeForExactMatch(answer) === normalizeForExactMatch(expected)
+      setAutoResult(isCorrect)
+      await saveReview(current, isCorrect, answer)
+    }
+  }, [answer, current, dir, expected, saveReview, saving, showExpected])
+
+  const onSelfGrade = useCallback(
+    async (wasCorrect: boolean) => {
+      if (!current || !showExpected || saving) return
+      const ok = await saveReview(current, wasCorrect, answer)
+      if (ok) goNext()
+    },
+    [answer, current, goNext, saveReview, saving, showExpected]
+  )
+
+  const done = !loading && cards.length > 0 && index >= cards.length
+
+  if (error) {
+    return (
+      <section className="stack">
+        <h1>Practice</h1>
+        <div className="card">
+          <div className="muted">Setup error</div>
+          <div className="mono">{error}</div>
+        </div>
+        <a className="button" href="/">
+          Back
+        </a>
+      </section>
+    )
+  }
+
+  if (loading) {
+    return (
+      <section className="stack">
+        <h1>Practice</h1>
+        <div className="card muted">Loading cards…</div>
+      </section>
+    )
+  }
+
+  if (done) {
+    return (
+      <section className="stack">
+        <h1>Done</h1>
+        <div className="card">
+          You reviewed <span className="mono">{cards.length}</span> cards.
+        </div>
+        <div className="row">
+          <a className="button primary" href="/">
+            New session
+          </a>
+          <button className="button" type="button" onClick={loadCards}>
+            Replay same settings
+          </button>
+        </div>
+      </section>
+    )
+  }
+
+  if (!current) {
+    return (
+      <section className="stack">
+        <h1>Practice</h1>
+        <div className="card">
+          No cards found. Add rows to <span className="mono">public.cards</span>{" "}
+          in Supabase.
+        </div>
+        <a className="button" href="/">
+          Back
+        </a>
+      </section>
+    )
+  }
+
+  return (
+    <section className="stack">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h1 style={{ margin: 0 }}>Practice</h1>
+        <div className="muted">
+          {index + 1}/{cards.length} ·{" "}
+          <span className="mono">
+            {mode}/{dir}
+          </span>
+        </div>
+      </div>
+
+      <div className="card stack">
+        <div className="muted">Prompt</div>
+        <div style={{ fontSize: 28, fontWeight: 650 }}>{prompt}</div>
+      </div>
+
+      <div className="card stack">
+        <label className="field" style={{ minWidth: "unset" }}>
+          <span className="label">
+            Your answer ({dir === "fr-ko" ? "Korean" : "French"})
+          </span>
+          <input
+            ref={inputRef}
+            className="input"
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                void onReveal()
+              }
+            }}
+            disabled={saving}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={dir !== "fr-ko"}
+          />
+        </label>
+
+        <div className="row">
+          {!showExpected ? (
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => void onReveal()}
+              disabled={saving}
+            >
+              {dir === "fr-ko" ? "Check" : "Reveal"}
+            </button>
+          ) : dir === "ko-fr" ? (
+            <>
+              <button
+                className="button ok"
+                type="button"
+                onClick={() => void onSelfGrade(true)}
+                disabled={saving}
+              >
+                Yes (correct)
+              </button>
+              <button
+                className="button danger"
+                type="button"
+                onClick={() => void onSelfGrade(false)}
+                disabled={saving}
+              >
+                No (wrong)
+              </button>
+            </>
+          ) : (
+            <button
+              className="button"
+              type="button"
+              onClick={goNext}
+              disabled={saving || !!saveError}
+            >
+              Next
+            </button>
+          )}
+
+          <a className="button" href="/">
+            Stop
+          </a>
+        </div>
+
+        {showExpected && (
+          <div className="card" style={{ padding: 14 }}>
+            <div className="muted">Expected</div>
+            <div style={{ fontSize: 22, fontWeight: 650 }}>{expected}</div>
+
+            {dir === "fr-ko" && autoResult !== null && (
+              <div className="row" style={{ marginTop: 10 }}>
+                <strong style={{ color: autoResult ? "var(--ok)" : "var(--danger)" }}>
+                  {autoResult ? "Correct" : "Wrong"}
+                </strong>
+                <span className="muted">
+                  · streak: <span className="mono">{current.streak}</span>
+                </span>
+                {saving && <span className="muted">· saving…</span>}
+              </div>
+            )}
+
+            {dir === "ko-fr" && (
+              <div className="muted" style={{ marginTop: 10 }}>
+                Choose Yes/No to save.
+                {saving && " Saving…"}
+              </div>
+            )}
+
+            {saveError && (
+              <div className="stack" style={{ marginTop: 10, gap: 8 }}>
+                <div className="muted">
+                  Save failed: <span className="mono">{saveError}</span>
+                </div>
+                {dir === "fr-ko" && autoResult !== null && (
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => void saveReview(current, autoResult, answer)}
+                    disabled={saving}
+                  >
+                    Retry save
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}

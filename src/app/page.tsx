@@ -1,7 +1,15 @@
+import StatsClient from "./stats/StatsClient"
+
 export default function HomePage() {
+  const hasUrl = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL)
+  const hasKey = Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+
   return (
     <section className="stack">
-      <h1>Practice Korean</h1>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h1 style={{ margin: 0 }}>Practice Korean</h1>
+        <StatsClient />
+      </div>
 
       <form action="/practice" method="GET" className="card stack">
         <div className="row">
@@ -56,8 +64,13 @@ export default function HomePage() {
       </form>
 
       <div className="card muted">
-        Requires <span className="mono">NEXT_PUBLIC_SUPABASE_URL</span> and{" "}
-        <span className="mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</span>.
+        Env status:{" "}
+        <span className="mono">
+          URL {hasUrl ? "OK" : "MISSING"} · KEY {hasKey ? "OK" : "MISSING"}
+        </span>
+        <br />
+        If missing, ensure you created <span className="mono">.env.local</span>{" "}
+        (repo root), then restart <span className="mono">npm run dev</span>.
       </div>
     </section>
   )

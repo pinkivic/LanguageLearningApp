@@ -12,10 +12,18 @@ export type Direction = "fr-ko" | "ko-fr"
 
 type CardRow = {
   id: string
-  french: string
-  korean: string
-  streak: number
+  direction: "ko_fr" | "fr_ko"
+  interval_days: number
+  ease_factor: number
+  reps: number
+  lapses: number
+  success_streak: number
+  state: "new" | "learning" | "review" | "relearning"
   due_at: string
+  note: {
+    korean: string
+    french: string
+  } | null
 }
 
 type Props = {
@@ -26,12 +34,24 @@ type Props = {
   }
 }
 
+function formatUnknownError(value: unknown): string {
+  if (value instanceof Error) return value.message
+  if (typeof value === "string") return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
 function getPrompt(card: CardRow, dir: Direction): string {
-  return dir === "fr-ko" ? card.french : card.korean
+  if (!card.note) return ""
+  return dir === "fr-ko" ? card.note.french : card.note.korean
 }
 
 function getExpected(card: CardRow, dir: Direction): string {
-  return dir === "fr-ko" ? card.korean : card.french
+  if (!card.note) return ""
+  return dir === "fr-ko" ? card.note.korean : card.note.french
 }
 
 export default function PracticeClient({ options }: Props) {
@@ -54,8 +74,7 @@ export default function PracticeClient({ options }: Props) {
     try {
       setSupabase(getSupabaseBrowserClient())
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
+      setError(formatUnknownError(e))
       setSupabase(null)
     }
   }, [])
@@ -63,6 +82,18 @@ export default function PracticeClient({ options }: Props) {
   const current = cards[index] ?? null
   const prompt = current ? getPrompt(current, dir) : ""
   const expected = current ? getExpected(current, dir) : ""
+  const canSpeak =
+    !!current &&
+    ((dir === "fr-ko" && current.success_streak < 1) || dir === "ko-fr")
+
+  const speakKorean = useCallback(() => {
+    if (!current?.note?.korean) return
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return
+    const utterance = new SpeechSynthesisUtterance(current.note.korean)
+    utterance.lang = "ko-KR"
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utterance)
+  }, [current])
 
   const loadCards = useCallback(async () => {
     if (!supabase) return
@@ -77,12 +108,16 @@ export default function PracticeClient({ options }: Props) {
 
     try {
       const nowIso = new Date().toISOString()
+      const dirFilter = dir === "fr-ko" ? "fr_ko" : "ko_fr"
 
       if (mode === "streak") {
         const { data, error: fetchError } = await supabase
           .from("cards")
-          .select("id,french,korean,streak,due_at")
-          .order("streak", { ascending: true })
+          .select(
+            "id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
+          )
+          .eq("direction", dirFilter)
+          .order("success_streak", { ascending: true })
           .order("due_at", { ascending: true, nullsFirst: true })
           .limit(n)
 
@@ -93,7 +128,10 @@ export default function PracticeClient({ options }: Props) {
 
       const { data: due, error: dueError } = await supabase
         .from("cards")
-        .select("id,french,korean,streak,due_at")
+        .select(
+          "id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
+        )
+        .eq("direction", dirFilter)
         .lte("due_at", nowIso)
         .order("due_at", { ascending: true, nullsFirst: true })
         .limit(n)
@@ -108,7 +146,10 @@ export default function PracticeClient({ options }: Props) {
 
       const { data: upcoming, error: upcomingError } = await supabase
         .from("cards")
-        .select("id,french,korean,streak,due_at")
+        .select(
+          "id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
+        )
+        .eq("direction", dirFilter)
         .gt("due_at", nowIso)
         .order("due_at", { ascending: true })
         .limit(n - dueCards.length)
@@ -117,8 +158,7 @@ export default function PracticeClient({ options }: Props) {
 
       setCards([...dueCards, ...((upcoming ?? []) as CardRow[])])
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
+      setError(formatUnknownError(e))
       setCards([])
     } finally {
       setLoading(false)
@@ -150,20 +190,29 @@ export default function PracticeClient({ options }: Props) {
       setSaveError(null)
 
       const now = new Date()
-      const { nextDueAt, nextStreak } = computeNextSrs({
-        now,
-        wasCorrect,
-        previousStreak: card.streak ?? 0
-      })
+      const { nextDueAt, intervalDays, easeFactor, reps, lapses, successStreak, state } =
+        computeNextSrs({
+          now,
+          wasCorrect,
+          intervalDays: card.interval_days ?? 1,
+          easeFactor: card.ease_factor ?? 2.2,
+          reps: card.reps ?? 0,
+          lapses: card.lapses ?? 0,
+          successStreak: card.success_streak ?? 0,
+          state: card.state ?? "new"
+        })
 
       const { error: updateError } = await supabase
         .from("cards")
         .update({
-          streak: nextStreak,
+          interval_days: intervalDays,
+          ease_factor: easeFactor,
+          reps,
+          lapses,
+          success_streak: successStreak,
+          state,
           due_at: nextDueAt.toISOString(),
-          last_reviewed_at: now.toISOString(),
-          last_result: wasCorrect,
-          last_answer: userAnswer
+          last_reviewed_at: now.toISOString()
         })
         .eq("id", card.id)
 
@@ -177,7 +226,16 @@ export default function PracticeClient({ options }: Props) {
       setCards((prev) =>
         prev.map((c) =>
           c.id === card.id
-            ? { ...c, streak: nextStreak, due_at: nextDueAt.toISOString() }
+            ? {
+                ...c,
+                interval_days: intervalDays,
+                ease_factor: easeFactor,
+                reps,
+                lapses,
+                success_streak: successStreak,
+                state,
+                due_at: nextDueAt.toISOString()
+              }
             : c
         )
       )
@@ -258,8 +316,9 @@ export default function PracticeClient({ options }: Props) {
       <section className="stack">
         <h1>Practice</h1>
         <div className="card">
-          No cards found. Add rows to <span className="mono">public.cards</span>{" "}
-          in Supabase.
+          No cards found for that direction. Check{" "}
+          <span className="mono">public.cards</span> and{" "}
+          <span className="mono">public.notes</span>.
         </div>
         <a className="button" href="/">
           Back
@@ -283,6 +342,13 @@ export default function PracticeClient({ options }: Props) {
       <div className="card stack">
         <div className="muted">Prompt</div>
         <div style={{ fontSize: 28, fontWeight: 650 }}>{prompt}</div>
+        {canSpeak && (
+          <div className="row">
+            <button className="button" type="button" onClick={speakKorean}>
+              🔊 Hear Korean
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="card stack">
@@ -364,7 +430,7 @@ export default function PracticeClient({ options }: Props) {
                   {autoResult ? "Correct" : "Wrong"}
                 </strong>
                 <span className="muted">
-                  · streak: <span className="mono">{current.streak}</span>
+                  · streak: <span className="mono">{current.success_streak}</span>
                 </span>
                 {saving && <span className="muted">· saving…</span>}
               </div>

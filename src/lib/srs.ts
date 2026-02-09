@@ -1,35 +1,84 @@
-function addMinutes(date: Date, minutes: number): Date {
-  return new Date(date.getTime() + minutes * 60_000)
-}
-
 function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * 86_400_000)
 }
 
-const SCHEDULE_DAYS = [1, 3, 7, 14, 30, 60, 120, 240]
+const LEARNING_STEPS = [1, 3]
+
+type SrsInput = {
+  now: Date
+  wasCorrect: boolean
+  intervalDays: number
+  easeFactor: number
+  reps: number
+  lapses: number
+  successStreak: number
+  state: "new" | "learning" | "review" | "relearning"
+}
+
+function clampEase(value: number): number {
+  return Math.min(2.5, Math.max(1.3, value))
+}
 
 export function computeNextSrs({
   now,
   wasCorrect,
-  previousStreak
-}: {
-  now: Date
-  wasCorrect: boolean
-  previousStreak: number
-}): { nextDueAt: Date; nextStreak: number } {
+  intervalDays,
+  easeFactor,
+  reps,
+  lapses,
+  successStreak,
+  state
+}: SrsInput): {
+  nextDueAt: Date
+  intervalDays: number
+  easeFactor: number
+  reps: number
+  lapses: number
+  successStreak: number
+  state: "new" | "learning" | "review" | "relearning"
+} {
   if (!wasCorrect) {
     return {
-      nextStreak: 0,
-      nextDueAt: addMinutes(now, 10)
+      nextDueAt: addDays(now, 1),
+      intervalDays: 1,
+      easeFactor: clampEase(easeFactor - 0.2),
+      reps,
+      lapses: lapses + 1,
+      successStreak: 0,
+      state: "relearning"
     }
   }
 
-  const nextStreak = Math.max(0, previousStreak) + 1
-  const days =
-    SCHEDULE_DAYS[Math.min(nextStreak - 1, SCHEDULE_DAYS.length - 1)]
+  const nextReps = reps + 1
+  const nextSuccessStreak = successStreak + 1
+  const nextEase = clampEase(easeFactor + 0.1)
+
+  if (state === "new" || state === "learning" || state === "relearning") {
+    const stepIndex = Math.min(nextSuccessStreak - 1, LEARNING_STEPS.length - 1)
+    const nextInterval = LEARNING_STEPS[stepIndex]
+    return {
+      nextDueAt: addDays(now, nextInterval),
+      intervalDays: nextInterval,
+      easeFactor: nextEase,
+      reps: nextReps,
+      lapses,
+      successStreak: nextSuccessStreak,
+      state: nextSuccessStreak >= LEARNING_STEPS.length ? "review" : "learning"
+    }
+  }
+
+  const nextInterval = Math.max(
+    1,
+    Math.round(Math.max(1, intervalDays) * nextEase)
+  )
 
   return {
-    nextStreak,
-    nextDueAt: addDays(now, days)
+    nextDueAt: addDays(now, nextInterval),
+    intervalDays: nextInterval,
+    easeFactor: nextEase,
+    reps: nextReps,
+    lapses,
+    successStreak: nextSuccessStreak,
+    state: "review"
   }
 }

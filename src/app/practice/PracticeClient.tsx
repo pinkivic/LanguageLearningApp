@@ -92,6 +92,11 @@ export default function PracticeClient({ options }: Props) {
   const [results, setResults] = useState<Record<string, boolean>>({})
   const [score, setScore] = useState(0)
   const [timeLeft, setTimeLeft] = useState(90)
+  const [timeExpired, setTimeExpired] = useState(false)
+  const [finishReady, setFinishReady] = useState(false)
+  const [finished, setFinished] = useState(false)
+  const [retryMode, setRetryMode] = useState(false)
+  const [retryResults, setRetryResults] = useState<Record<string, boolean>>({})
 
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -135,6 +140,11 @@ export default function PracticeClient({ options }: Props) {
     setResults({})
     setScore(0)
     setTimeLeft(90)
+    setTimeExpired(false)
+    setFinishReady(false)
+    setFinished(false)
+    setRetryMode(false)
+    setRetryResults({})
 
     try {
       const nowIso = new Date().toISOString()
@@ -207,6 +217,10 @@ export default function PracticeClient({ options }: Props) {
   }, [loading, timeLeft])
 
   useEffect(() => {
+    if (timeLeft <= 0 && !timeExpired) setTimeExpired(true)
+  }, [timeExpired, timeLeft])
+
+  useEffect(() => {
     if (!loading) inputRef.current?.focus()
   }, [loading, index])
 
@@ -222,6 +236,7 @@ export default function PracticeClient({ options }: Props) {
   const saveReview = useCallback(
     async (card: CardRow, wasCorrect: boolean, userAnswer: string) => {
       if (!supabase) return
+      if (retryMode) return true
 
       setSaving(true)
       setSaveError(null)
@@ -282,7 +297,7 @@ export default function PracticeClient({ options }: Props) {
   )
 
   const onReveal = useCallback(async () => {
-    if (!current || showExpected || saving || timeLeft <= 0) return
+    if (!current || showExpected || saving || finishReady) return
 
     setShowExpected(true)
 
@@ -292,29 +307,62 @@ export default function PracticeClient({ options }: Props) {
       setAutoResult(isCorrect)
       const ok = await saveReview(current, isCorrect, answer)
       if (ok) {
-        setResults((prev) => ({ ...prev, [current.id]: isCorrect }))
-        if (isCorrect) setScore((prev) => prev + 1)
+        if (retryMode) {
+          setRetryResults((prev) => ({ ...prev, [current.id]: isCorrect }))
+        } else {
+          setResults((prev) => ({ ...prev, [current.id]: isCorrect }))
+          if (isCorrect) setScore((prev) => prev + 1)
+        }
+        if (timeExpired) setFinishReady(true)
       }
     }
-  }, [answer, current, dir, expected, saveReview, saving, showExpected, timeLeft])
+  }, [
+    answer,
+    current,
+    dir,
+    expected,
+    finishReady,
+    retryMode,
+    saveReview,
+    saving,
+    showExpected,
+    timeExpired
+  ])
 
   const onSelfGrade = useCallback(
     async (wasCorrect: boolean) => {
-      if (!current || !showExpected || saving || timeLeft <= 0) return
+      if (!current || !showExpected || saving || finishReady) return
       const ok = await saveReview(current, wasCorrect, answer)
       if (ok) {
-        setResults((prev) => ({ ...prev, [current.id]: wasCorrect }))
-        if (wasCorrect) setScore((prev) => prev + 1)
-        goNext()
+        if (retryMode) {
+          setRetryResults((prev) => ({ ...prev, [current.id]: wasCorrect }))
+        } else {
+          setResults((prev) => ({ ...prev, [current.id]: wasCorrect }))
+          if (wasCorrect) setScore((prev) => prev + 1)
+        }
+        if (timeExpired) {
+          setFinishReady(true)
+        } else {
+          goNext()
+        }
       }
     },
-    [answer, current, goNext, saveReview, saving, showExpected, timeLeft]
+    [
+      answer,
+      current,
+      finishReady,
+      retryMode,
+      goNext,
+      saveReview,
+      saving,
+      showExpected,
+      timeExpired
+    ]
   )
 
-  const timeUp = timeLeft <= 0
   const done =
     !loading &&
-    (timeUp || (cards.length > 0 && index >= cards.length))
+    (finished || (!retryMode && cards.length > 0 && index >= cards.length))
   const failedCards = cards.filter((card) => results[card.id] === false)
   const successCards = cards.filter((card) => results[card.id] === true)
 
@@ -334,6 +382,40 @@ export default function PracticeClient({ options }: Props) {
       // ignore
     }
   }, [done, score])
+
+  const onFinish = useCallback(() => {
+    if (!retryMode && failedCards.length > 0) {
+      setRetryMode(true)
+      setRetryResults({})
+      setCards(failedCards)
+      setIndex(0)
+      setAnswer("")
+      setShowExpected(false)
+      setAutoResult(null)
+      setFinishReady(false)
+      setTimeExpired(false)
+      setTimeLeft(0)
+      return
+    }
+
+    if (retryMode) {
+      const stillFailed = cards.filter((card) => retryResults[card.id] === false)
+      if (stillFailed.length > 0) {
+        setRetryResults({})
+        setCards(stillFailed)
+        setIndex(0)
+        setAnswer("")
+        setShowExpected(false)
+        setAutoResult(null)
+        setFinishReady(false)
+        setTimeExpired(false)
+        setTimeLeft(0)
+        return
+      }
+    }
+
+    setFinished(true)
+  }, [cards, failedCards, retryMode, retryResults])
 
   if (error) {
     return (
@@ -439,6 +521,7 @@ export default function PracticeClient({ options }: Props) {
           <span className="mono">
             {mode}/{dir}
           </span>
+          {retryMode && <span className="muted"> · retry mode</span>}
         </div>
       </div>
 
@@ -470,7 +553,7 @@ export default function PracticeClient({ options }: Props) {
                 void onReveal()
               }
             }}
-            disabled={saving || timeUp}
+            disabled={saving || finishReady}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={dir !== "fr-ko"}
@@ -483,9 +566,18 @@ export default function PracticeClient({ options }: Props) {
               className="button primary"
               type="button"
               onClick={() => void onReveal()}
-              disabled={saving || timeUp}
+              disabled={saving || finishReady}
             >
               {dir === "fr-ko" ? "Check" : "Reveal"}
+            </button>
+          ) : finishReady ? (
+            <button
+              className="button primary"
+              type="button"
+              onClick={onFinish}
+              disabled={saving}
+            >
+              Finish
             </button>
           ) : dir === "ko-fr" ? (
             <>
@@ -493,7 +585,7 @@ export default function PracticeClient({ options }: Props) {
                 className="button ok"
                 type="button"
                 onClick={() => void onSelfGrade(true)}
-                disabled={saving || timeUp}
+                disabled={saving || finishReady}
               >
                 Yes (correct)
               </button>
@@ -501,7 +593,7 @@ export default function PracticeClient({ options }: Props) {
                 className="button danger"
                 type="button"
                 onClick={() => void onSelfGrade(false)}
-                disabled={saving || timeUp}
+                disabled={saving || finishReady}
               >
                 No (wrong)
               </button>
@@ -511,7 +603,7 @@ export default function PracticeClient({ options }: Props) {
               className="button"
               type="button"
               onClick={goNext}
-              disabled={saving || !!saveError || timeUp}
+              disabled={saving || !!saveError || finishReady}
             >
               Next
             </button>

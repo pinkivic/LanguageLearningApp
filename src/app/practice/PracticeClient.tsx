@@ -13,6 +13,7 @@ export type Direction = "fr-ko" | "ko-fr"
 
 type CardRow = {
   id: string
+  note_id: string
   direction: "ko_fr" | "fr_ko"
   interval_days: number
   ease_factor: number
@@ -97,6 +98,11 @@ export default function PracticeClient({ options }: Props) {
   const [finished, setFinished] = useState(false)
   const [retryMode, setRetryMode] = useState(false)
   const [retryResults, setRetryResults] = useState<Record<string, boolean>>({})
+  const [editOpen, setEditOpen] = useState(false)
+  const [editKorean, setEditKorean] = useState("")
+  const [editFrench, setEditFrench] = useState("")
+  const [editError, setEditError] = useState<string | null>(null)
+  const [editSaving, setEditSaving] = useState(false)
 
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -117,6 +123,7 @@ export default function PracticeClient({ options }: Props) {
   const canSpeak =
     !!current &&
     ((dir === "fr-ko" && current.success_streak < 1) || dir === "ko-fr")
+  const canEdit = !!current && showExpected
 
   const speakKorean = useCallback(() => {
     if (!current?.note?.korean) return
@@ -153,7 +160,7 @@ export default function PracticeClient({ options }: Props) {
         const { data, error: fetchError } = await supabase
           .from("cards")
           .select(
-            "id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
+            "id,note_id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
           )
           .order("success_streak", { ascending: true })
           .order("due_at", { ascending: true, nullsFirst: true })
@@ -167,7 +174,7 @@ export default function PracticeClient({ options }: Props) {
       const { data: due, error: dueError } = await supabase
         .from("cards")
         .select(
-          "id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
+          "id,note_id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
         )
         .lte("due_at", nowIso)
         .order("due_at", { ascending: true, nullsFirst: true })
@@ -184,7 +191,7 @@ export default function PracticeClient({ options }: Props) {
       const { data: upcoming, error: upcomingError } = await supabase
         .from("cards")
         .select(
-          "id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
+          "id,note_id,direction,interval_days,ease_factor,reps,lapses,success_streak,state,due_at,note:notes (korean,french)"
         )
         .gt("due_at", nowIso)
         .order("due_at", { ascending: true })
@@ -208,17 +215,21 @@ export default function PracticeClient({ options }: Props) {
   }, [loadCards])
 
   useEffect(() => {
+    if (retryMode) return
     if (loading) return
+    if (editOpen) return
     if (timeLeft <= 0) return
     const interval = window.setInterval(() => {
       setTimeLeft((prev) => Math.max(0, prev - 1))
     }, 1000)
     return () => window.clearInterval(interval)
-  }, [loading, timeLeft])
+  }, [editOpen, loading, retryMode, timeLeft])
 
   useEffect(() => {
+    if (retryMode) return
+    if (editOpen) return
     if (timeLeft <= 0 && !timeExpired) setTimeExpired(true)
-  }, [timeExpired, timeLeft])
+  }, [editOpen, retryMode, timeExpired, timeLeft])
 
   useEffect(() => {
     if (!loading) inputRef.current?.focus()
@@ -230,8 +241,90 @@ export default function PracticeClient({ options }: Props) {
     setAutoResult(null)
     setSaving(false)
     setSaveError(null)
+    setEditOpen(false)
+    setEditError(null)
     setIndex((i) => i + 1)
   }, [])
+
+  const openEdit = useCallback(() => {
+    if (!current?.note) return
+    setEditKorean(current.note.korean)
+    setEditFrench(current.note.french)
+    setEditError(null)
+    setEditOpen(true)
+  }, [current])
+
+  const closeEdit = useCallback(() => {
+    setEditOpen(false)
+    setEditError(null)
+  }, [])
+
+  const saveEdit = useCallback(async () => {
+    if (!current || !supabase) return
+    const ok = window.confirm("Save changes to this word?")
+    if (!ok) return
+    setEditSaving(true)
+    setEditError(null)
+    const { error: updateError } = await supabase
+      .from("notes")
+      .update({
+        korean: editKorean,
+        french: editFrench
+      })
+      .eq("id", current.note_id)
+
+    setEditSaving(false)
+
+    if (updateError) {
+      setEditError(updateError.message)
+      return
+    }
+
+    setCards((prev) =>
+      prev.map((card) =>
+        card.note_id === current.note_id
+          ? {
+              ...card,
+              note: {
+                korean: editKorean,
+                french: editFrench
+              }
+            }
+          : card
+      )
+    )
+    setEditOpen(false)
+  }, [current, editFrench, editKorean, supabase])
+
+  const deleteNote = useCallback(async () => {
+    if (!current || !supabase) return
+    const ok = window.confirm(
+      "Delete this word? This removes both directions and cannot be undone."
+    )
+    if (!ok) return
+    setEditSaving(true)
+    setEditError(null)
+    const { error: deleteCardsError } = await supabase
+      .from("cards")
+      .delete()
+      .eq("note_id", current.note_id)
+    if (deleteCardsError) {
+      setEditSaving(false)
+      setEditError(deleteCardsError.message)
+      return
+    }
+    const { error: deleteNoteError } = await supabase
+      .from("notes")
+      .delete()
+      .eq("id", current.note_id)
+    setEditSaving(false)
+    if (deleteNoteError) {
+      setEditError(deleteNoteError.message)
+      return
+    }
+    setCards((prev) => prev.filter((card) => card.note_id !== current.note_id))
+    setEditOpen(false)
+  }, [current, supabase])
 
   const saveReview = useCallback(
     async (card: CardRow, wasCorrect: boolean, userAnswer: string) => {
@@ -297,7 +390,7 @@ export default function PracticeClient({ options }: Props) {
   )
 
   const onReveal = useCallback(async () => {
-    if (!current || showExpected || saving || finishReady) return
+    if (!current || showExpected || saving || (!retryMode && finishReady)) return
 
     setShowExpected(true)
 
@@ -313,7 +406,7 @@ export default function PracticeClient({ options }: Props) {
           setResults((prev) => ({ ...prev, [current.id]: isCorrect }))
           if (isCorrect) setScore((prev) => prev + 1)
         }
-        if (timeExpired) setFinishReady(true)
+        if (!retryMode && timeExpired) setFinishReady(true)
       }
     }
   }, [
@@ -331,7 +424,8 @@ export default function PracticeClient({ options }: Props) {
 
   const onSelfGrade = useCallback(
     async (wasCorrect: boolean) => {
-      if (!current || !showExpected || saving || finishReady) return
+      if (!current || !showExpected || saving || (!retryMode && finishReady))
+        return
       const ok = await saveReview(current, wasCorrect, answer)
       if (ok) {
         if (retryMode) {
@@ -340,7 +434,7 @@ export default function PracticeClient({ options }: Props) {
           setResults((prev) => ({ ...prev, [current.id]: wasCorrect }))
           if (wasCorrect) setScore((prev) => prev + 1)
         }
-        if (timeExpired) {
+        if (!retryMode && timeExpired) {
           setFinishReady(true)
         } else {
           goNext()
@@ -416,6 +510,25 @@ export default function PracticeClient({ options }: Props) {
 
     setFinished(true)
   }, [cards, failedCards, retryMode, retryResults])
+
+  useEffect(() => {
+    if (!retryMode) return
+    if (loading) return
+    if (index < cards.length) return
+
+    const stillFailed = cards.filter((card) => retryResults[card.id] === false)
+    if (stillFailed.length > 0) {
+      setRetryResults({})
+      setCards(stillFailed)
+      setIndex(0)
+      setAnswer("")
+      setShowExpected(false)
+      setAutoResult(null)
+      return
+    }
+
+    setFinished(true)
+  }, [cards, index, loading, retryMode, retryResults])
 
   if (error) {
     return (
@@ -526,13 +639,73 @@ export default function PracticeClient({ options }: Props) {
       </div>
 
       <div className="card stack">
-        <div className="muted">Prompt</div>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="muted">Prompt</div>
+          {canEdit && (
+            <button className="button" type="button" onClick={openEdit}>
+              ⚙️
+            </button>
+          )}
+        </div>
         <div style={{ fontSize: 28, fontWeight: 650 }}>{prompt}</div>
         {canSpeak && (
           <div className="row">
             <button className="button" type="button" onClick={speakKorean}>
               🔊 Hear Korean
             </button>
+          </div>
+        )}
+        {editOpen && (
+          <div className="card stack" style={{ padding: 12 }}>
+            <label className="field" style={{ minWidth: "unset" }}>
+              <span className="label">Korean</span>
+              <input
+                className="input"
+                value={editKorean}
+                onChange={(e) => setEditKorean(e.target.value)}
+                disabled={editSaving}
+              />
+            </label>
+            <label className="field" style={{ minWidth: "unset" }}>
+              <span className="label">French</span>
+              <input
+                className="input"
+                value={editFrench}
+                onChange={(e) => setEditFrench(e.target.value)}
+                disabled={editSaving}
+              />
+            </label>
+            {editError && (
+              <div className="muted">
+                {editError}
+              </div>
+            )}
+            <div className="row">
+              <button
+                className="button ok"
+                type="button"
+                onClick={saveEdit}
+                disabled={editSaving}
+              >
+                Save
+              </button>
+              <button
+                className="button danger"
+                type="button"
+                onClick={deleteNote}
+                disabled={editSaving}
+              >
+                Delete
+              </button>
+              <button
+                className="button"
+                type="button"
+                onClick={closeEdit}
+                disabled={editSaving}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
       </div>

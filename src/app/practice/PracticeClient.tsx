@@ -81,6 +81,7 @@ export default function PracticeClient({ options }: Props) {
   const { mode } = options
   const [supabase, setSupabase] = useState<SupabaseClient | null>(null)
   const [cards, setCards] = useState<CardRow[]>([])
+  const [baseCards, setBaseCards] = useState<CardRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -98,6 +99,10 @@ export default function PracticeClient({ options }: Props) {
   const [finished, setFinished] = useState(false)
   const [retryMode, setRetryMode] = useState(false)
   const [retryResults, setRetryResults] = useState<Record<string, boolean>>({})
+  const [displayCards, setDisplayCards] = useState<CardRow[]>([])
+  const [displayResults, setDisplayResults] = useState<Record<string, boolean>>(
+    {}
+  )
   const [editOpen, setEditOpen] = useState(false)
   const [editKorean, setEditKorean] = useState("")
   const [editFrench, setEditFrench] = useState("")
@@ -152,6 +157,8 @@ export default function PracticeClient({ options }: Props) {
     setFinished(false)
     setRetryMode(false)
     setRetryResults({})
+    setDisplayCards([])
+    setDisplayResults({})
 
     try {
       const nowIso = new Date().toISOString()
@@ -167,7 +174,9 @@ export default function PracticeClient({ options }: Props) {
           .limit(limit)
 
         if (fetchError) throw fetchError
-        setCards(shuffle(mapCardRows(data as CardRowRaw[] | null)))
+        const mapped = shuffle(mapCardRows(data as CardRowRaw[] | null))
+        setCards(mapped)
+        setBaseCards(mapped)
         return
       }
 
@@ -184,7 +193,9 @@ export default function PracticeClient({ options }: Props) {
 
       const dueCards = mapCardRows(due as CardRowRaw[] | null)
       if (dueCards.length >= limit) {
-        setCards(shuffle(dueCards))
+        const mapped = shuffle(dueCards)
+        setCards(mapped)
+        setBaseCards(mapped)
         return
       }
 
@@ -199,9 +210,12 @@ export default function PracticeClient({ options }: Props) {
 
       if (upcomingError) throw upcomingError
 
-      setCards(
-        shuffle([...dueCards, ...mapCardRows(upcoming as CardRowRaw[] | null)])
-      )
+      const mapped = shuffle([
+        ...dueCards,
+        ...mapCardRows(upcoming as CardRowRaw[] | null)
+      ])
+      setCards(mapped)
+      setBaseCards(mapped)
     } catch (e) {
       setError(formatUnknownError(e))
       setCards([])
@@ -457,8 +471,15 @@ export default function PracticeClient({ options }: Props) {
   const done =
     !loading &&
     (finished || (!retryMode && cards.length > 0 && index >= cards.length))
-  const failedCards = cards.filter((card) => results[card.id] === false)
-  const successCards = cards.filter((card) => results[card.id] === true)
+  const finalCards = displayCards.length > 0 ? displayCards : baseCards
+  const finalResults =
+    Object.keys(displayResults).length > 0 ? displayResults : results
+  const failedCards = finalCards.filter(
+    (card) => finalResults[card.id] === false
+  )
+  const successCards = finalCards.filter(
+    (card) => finalResults[card.id] === true
+  )
 
   useEffect(() => {
     if (!done) return
@@ -476,6 +497,12 @@ export default function PracticeClient({ options }: Props) {
       // ignore
     }
   }, [done, score])
+
+  useEffect(() => {
+    if (!finished) return
+    setDisplayCards(baseCards)
+    setDisplayResults(results)
+  }, [baseCards, finished, results])
 
   const onFinish = useCallback(() => {
     if (!retryMode && failedCards.length > 0) {
